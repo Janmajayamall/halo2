@@ -1193,9 +1193,12 @@ impl<F: Field> ConstraintSystem<F> {
         let mut degrees = vec![0; selectors.len()];
         for expr in self.gates.iter().flat_map(|gate| gate.polys.iter()) {
             if let Some(selector) = expr.extract_simple_selector() {
+                // JAY: why does expr.degree matter her?
+                println!("gate selector: {:?} {:?}", selector, expr);
                 degrees[selector.0] = max(degrees[selector.0], expr.degree());
             }
         }
+        println!("selector degrees: {:?}", degrees);
 
         // We will not increase the degree of the constraint system, so we limit
         // ourselves to the largest existing degree constraint.

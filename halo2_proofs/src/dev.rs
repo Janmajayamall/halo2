@@ -473,9 +473,11 @@ impl<F: FieldExt> MockProver<F> {
         instance: Vec<Vec<F>>,
     ) -> Result<Self, Error> {
         let n = 1 << k;
-
+        println!("n: {}", n);
         let mut cs = ConstraintSystem::default();
+
         let config = ConcreteCircuit::configure(&mut cs);
+        println!("constraint system {:?}", cs);
         let cs = cs;
 
         if n < cs.minimum_rows() {
@@ -516,6 +518,7 @@ impl<F: FieldExt> MockProver<F> {
             cs.num_advice_columns
         ];
         let permutation = permutation::keygen::Assembly::new(n, &cs.permutation);
+        println!("Permutation {:?}", permutation);
         let constants = cs.constants.clone();
 
         let mut prover = MockProver {
@@ -535,6 +538,7 @@ impl<F: FieldExt> MockProver<F> {
         ConcreteCircuit::FloorPlanner::synthesize(&mut prover, circuit, config, constants)?;
 
         let (cs, selector_polys) = prover.cs.compress_selectors(prover.selectors.clone());
+        
         prover.cs = cs;
         prover.fixed.extend(selector_polys.into_iter().map(|poly| {
             let mut v = vec![CellValue::Unassigned; n];

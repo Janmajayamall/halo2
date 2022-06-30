@@ -29,4 +29,5 @@ pub mod poseidon;
 #[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
 pub mod sha256;
 pub mod sinsemilla;
+pub mod trial;
 pub mod utilities;
