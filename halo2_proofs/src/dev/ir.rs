@@ -34,6 +34,19 @@ struct Variable {
     col_type: ColType,
 }
 
+impl Variable {
+    /// key = (col_type, column_index, rotation)
+    /// rotation is always `0` for selector column
+    fn key(&self) -> (usize, usize, i32) {
+        match self.col_type {
+            ColType::Advice(c_i, r) => (0, c_i, r),
+            ColType::Fixed(c_i, r) => (1, c_i, r),
+            ColType::Instance(c_i, r) => (2, c_i, r),
+            ColType::Selector(c_i) => (3, c_i, 0),
+        }
+    }
+}
+
 enum ColType {
     Advice(usize, i32),
     Fixed(usize, i32),
@@ -47,8 +60,8 @@ impl Ir {
         let _ = C::configure(&mut cs);
         let cs = cs;
 
-        cs.gates.iter().map(|gate| {
-            gate.polynomials().iter().for_each(|c| {
+        let variables_vec = cs.gates.iter().flat_map(|gate| {
+            gate.polynomials().iter().flat_map(|c| {
                 c.evaluate(
                     &|_| vec![],
                     &|selector| {
@@ -60,19 +73,19 @@ impl Ir {
                     &|_, column, rotation| {
                         vec![Variable {
                             index: 0,
-                            col_type: ColType::Fixed(rotation.0),
+                            col_type: ColType::Fixed(column, rotation.0),
                         }]
                     },
                     &|_, column, rotation| {
                         vec![Variable {
                             index: 0,
-                            col_type: ColType::Advice(rotation.0),
+                            col_type: ColType::Advice(column, rotation.0),
                         }]
                     },
                     &|_, column, rotation| {
                         vec![Variable {
                             index: 0,
-                            col_type: ColType::Instance(rotation.0),
+                            col_type: ColType::Instance(column, rotation.0),
                         }]
                     },
                     &|a| a,
@@ -85,8 +98,16 @@ impl Ir {
                         a
                     },
                     &|a, _| a,
-                );
-            });
+                )
+            })
+        });
+
+        let mut variables_map = HashMap::new();
+        let mut index: usize = 0;
+        variables_vec.for_each(|v| {
+            let v = variables_map.entry(v.key()).or_insert(v);
+            v.index = index;
+            index += 1;
         });
     }
 }
