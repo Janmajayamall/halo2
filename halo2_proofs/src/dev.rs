@@ -31,6 +31,8 @@ pub use cost::CircuitCost;
 mod gates;
 pub use gates::CircuitGates;
 
+mod ir;
+
 #[cfg(feature = "dev-graph")]
 mod graph;
 
