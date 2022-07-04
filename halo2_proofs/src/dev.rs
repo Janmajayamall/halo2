@@ -32,6 +32,7 @@ mod gates;
 pub use gates::CircuitGates;
 
 mod ir;
+pub use ir::Ir;
 
 #[cfg(feature = "dev-graph")]
 mod graph;
