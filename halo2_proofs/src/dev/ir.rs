@@ -6,6 +6,8 @@
 // fixed: [[1,2,3], [4,5,6], ...]
 // copies: [((I,0,0), (A,1,2)), ...]
 // halo2.gates: [ {name: "gate name", constraints: [{0 : "contraint 0"}, {3: "constraint 3"}]}]
+// halo2.lookups: [ {0: lookup_maps} ]
+// lookup_maps: [{0: ("input poly", "table_poly")}]
 
 use super::util;
 use crate::circuit::Value;
@@ -17,7 +19,7 @@ use crate::poly::Rotation;
 use ff::Field;
 use pasta_curves::arithmetic::FieldExt;
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, write};
 use std::io;
 use std::ops::Index;
 use std::path::Ancestors;
@@ -43,6 +45,20 @@ pub struct Gate<F: Field> {
     name: &'static str,
     constraints: Vec<Constraint<F>>,
 }
+
+#[derive(Debug)]
+pub struct Lookup<F: Field> {
+    index: usize,
+    mappings: Vec<LookupMap<F>>,
+}
+
+#[derive(Debug)]
+pub struct LookupMap<F: Field> {
+    index: usize,
+    input: Polynomial<F>,
+    table: Polynomial<F>,
+}
+
 #[derive(Debug)]
 pub struct Variable {
     column_type: Any,
@@ -99,6 +115,24 @@ impl<F: Field> fmt::Display for Gate<F> {
     }
 }
 
+impl<F: Field> fmt::Display for Lookup<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: [", self.index)?;
+        for m in &self.mappings {
+            write!(f, "{}", m)?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl<F: Field> fmt::Display for LookupMap<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: (", self.index)?;
+        write!(f, "{}, ", self.input)?;
+        write!(f, "{})", self.table)
+    }
+}
+
 /// IR struct
 #[derive(Debug)]
 pub struct Ir<F: Field> {
@@ -152,10 +186,11 @@ impl<F: FieldExt> Ir<F> {
                     .collect::<Vec<_>>(),
             );
         }
-        let gates = ir.collect_gates(cs);
+        let gates = ir.collect_gates(&cs);
+        let lookups = ir.collect_lookup(&cs);
     }
 
-    fn collect_gates(&mut self, cs: ConstraintSystem<F>) -> Vec<Gate<F>> {
+    fn collect_gates(&mut self, cs: &ConstraintSystem<F>) -> Vec<Gate<F>> {
         cs.gates
             .iter()
             .map(|gate| Gate {
@@ -167,6 +202,94 @@ impl<F: FieldExt> Ir<F> {
                     .map(|(i, constraint)| Constraint {
                         name: gate.constraint_name(i),
                         expression: constraint.evaluate(
+                            &Polynomial::Scalar,
+                            &|selector| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Fixed,
+                                    index: self.selector_index + selector.0,
+                                    offset: 0,
+                                })
+                            },
+                            &|_, column, rotation| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Fixed,
+                                    index: column,
+                                    offset: rotation.0,
+                                })
+                            },
+                            &|_, column, rotation| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Advice,
+                                    index: column,
+                                    offset: rotation.0,
+                                })
+                            },
+                            &|_, column, rotation| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Instance,
+                                    index: column,
+                                    offset: rotation.0,
+                                })
+                            },
+                            &|x| Polynomial::Neg(Box::new(x)),
+                            &|x, y| Polynomial::Add(Box::new(x), Box::new(y)),
+                            &|x, y| Polynomial::Mul(Box::new(x), Box::new(y)),
+                            &|a, s| Polynomial::Mul(Box::new(Polynomial::Scalar(s)), Box::new(a)),
+                        ),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    fn collect_lookup(&mut self, cs: &ConstraintSystem<F>) -> Vec<Lookup<F>> {
+        cs.lookups
+            .iter()
+            .map(|lookup| Lookup {
+                index: 0,
+                mappings: lookup
+                    .input_expressions
+                    .iter()
+                    .zip(lookup.table_expressions.iter())
+                    .enumerate()
+                    .map(|(index, (input, table))| LookupMap {
+                        index,
+                        input: input.evaluate(
+                            &Polynomial::Scalar,
+                            &|selector| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Fixed,
+                                    index: self.selector_index + selector.0,
+                                    offset: 0,
+                                })
+                            },
+                            &|_, column, rotation| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Fixed,
+                                    index: column,
+                                    offset: rotation.0,
+                                })
+                            },
+                            &|_, column, rotation| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Advice,
+                                    index: column,
+                                    offset: rotation.0,
+                                })
+                            },
+                            &|_, column, rotation| {
+                                Polynomial::Var(Variable {
+                                    column_type: Any::Instance,
+                                    index: column,
+                                    offset: rotation.0,
+                                })
+                            },
+                            &|x| Polynomial::Neg(Box::new(x)),
+                            &|x, y| Polynomial::Add(Box::new(x), Box::new(y)),
+                            &|x, y| Polynomial::Mul(Box::new(x), Box::new(y)),
+                            &|a, s| Polynomial::Mul(Box::new(Polynomial::Scalar(s)), Box::new(a)),
+                        ),
+                        table: table.evaluate(
                             &Polynomial::Scalar,
                             &|selector| {
                                 Polynomial::Var(Variable {
@@ -350,6 +473,8 @@ mod tests {
             let f = meta.fixed_column();
             let q1 = meta.selector();
             let q2 = meta.selector();
+            let q3 = meta.complex_selector();
+            let t1 = meta.lookup_table_column();
 
             meta.create_gate("Trial", |meta| {
                 let a = meta.query_advice(a, Rotation::cur());
@@ -378,6 +503,14 @@ mod tests {
                 vec![q1 * (a.clone() * (a + b.clone())), q2 * (b + f)]
             });
 
+            // lookup
+            meta.lookup(|meta| {
+                let q3 = meta.query_selector(q3);
+                let a = meta.query_advice(a, Rotation::cur());
+                let b = meta.query_advice(b, Rotation::cur());
+                vec![(q3 * (a + b), t1)]
+            });
+
             MyConfig {}
         }
 
@@ -395,9 +528,13 @@ mod tests {
         let mut cs = ConstraintSystem::<pallas::Base>::default();
         let _ = MyCircuit::configure(&mut cs);
         let mut ir = Ir::new(2, cs.num_fixed_columns, cs.num_selectors);
-        let gates = ir.collect_gates(cs);
+        let gates = ir.collect_gates(&cs);
+        let lookups = ir.collect_lookup(&cs);
         for gate in gates {
             println!("{}", gate);
+        }
+        for lookup in lookups {
+            println!("{}", lookup);
         }
     }
 }
