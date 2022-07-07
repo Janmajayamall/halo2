@@ -1,21 +1,11 @@
 //! IR for Plonk.
 
-// variables: [
-//     {
-//         index: 0,
-//         type: advice
-//     }
-// ],
-// gates: [
-//     {
-//         name,
-//         expressions: [
-//             exp1 (uses variables index from `variables`),
-//             ..
-//             ..
-//         ]
-//     }
-// ]
+// metadata: {"name": "MyCircuit", ...}
+// config: {"nrows": 5, "ninstance": 2, "nadvice: 10", "nfixed": 4}
+// constraints: [(F, 0, 1) * ((A, 1, 0) + (I, 0, -1)), ... ]
+// fixed: [[1,2,3], [4,5,6], ...]
+// copies: [((I,0,0), (A,1,2)), ...]
+// halo2.gates: [ {name: "gate name", constraints: [{0 : "contraint 0"}, {3: "constraint 3"}]}]
 
 use super::util;
 use crate::circuit::Value;
@@ -30,6 +20,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::ops::Index;
+use std::path::Ancestors;
 use std::slice::SliceIndex;
 
 #[derive(Debug)]
@@ -54,16 +45,17 @@ pub struct Gate<F: Field> {
 }
 #[derive(Debug)]
 pub struct Variable {
+    column_type: Any,
     index: usize,
-    col_type: Any,
+    offset: i32,
 }
 
 impl fmt::Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.col_type {
-            Any::Advice => write!(f, "A{}", self.index),
-            Any::Fixed => write!(f, "F{}", self.index),
-            Any::Instance => write!(f, "I{}", self.index),
+        match self.column_type {
+            Any::Advice => write!(f, "A{{{},{}}}", self.index, self.offset),
+            Any::Fixed => write!(f, "F{{{},{}}}", self.index, self.offset),
+            Any::Instance => write!(f, "I{{{},{}}}", self.index, self.offset),
         }
     }
 }
@@ -120,17 +112,6 @@ pub struct Ir<F: Field> {
     selector_index: usize,
 }
 
-fn query_index<'a, C, I>(queries: I, column: usize, rotation: Rotation) -> usize
-where
-    C: ColumnType,
-    I: IntoIterator<Item = &'a (Column<C>, Rotation)>,
-{
-    queries
-        .into_iter()
-        .position(|(col, rot)| col.index() == column && *rot == rotation)
-        .unwrap()
-}
-
 impl<F: FieldExt> Ir<F> {
     fn new(k: u32, num_fixed: usize, num_selectors: usize) -> Self {
         let num_rows = 1 << k;
@@ -159,7 +140,7 @@ impl<F: FieldExt> Ir<F> {
             .unwrap();
 
         if compress {
-            let (cs_compressed, selector_polys) = cs.compress_selectors(ir.selectors);
+            let (cs_compressed, selector_polys) = cs.compress_selectors(ir.selectors.clone());
             assert!(cs_compressed.num_fixed_columns == ir.selector_index + selector_polys.len());
             cs = cs_compressed;
             ir.fixed.extend(selector_polys)
@@ -171,6 +152,7 @@ impl<F: FieldExt> Ir<F> {
                     .collect::<Vec<_>>(),
             );
         }
+        let gates = ir.collect_gates(cs);
     }
 
     fn collect_gates(&mut self, cs: ConstraintSystem<F>) -> Vec<Gate<F>> {
@@ -188,29 +170,30 @@ impl<F: FieldExt> Ir<F> {
                             &Polynomial::Scalar,
                             &|selector| {
                                 Polynomial::Var(Variable {
-                                    index: selector.0 + cs.fixed_queries.len(),
-                                    col_type: Any::Fixed,
+                                    column_type: Any::Fixed,
+                                    index: self.selector_index + selector.0,
+                                    offset: 0,
                                 })
                             },
                             &|_, column, rotation| {
-                                let index = query_index(&cs.fixed_queries, column, rotation);
                                 Polynomial::Var(Variable {
-                                    index,
-                                    col_type: Any::Fixed,
+                                    column_type: Any::Fixed,
+                                    index: column,
+                                    offset: rotation.0,
                                 })
                             },
                             &|_, column, rotation| {
-                                let index = query_index(&cs.advice_queries, column, rotation);
                                 Polynomial::Var(Variable {
-                                    index,
-                                    col_type: Any::Advice,
+                                    column_type: Any::Advice,
+                                    index: column,
+                                    offset: rotation.0,
                                 })
                             },
                             &|_, column, rotation| {
-                                let index = query_index(&cs.instance_queries, column, rotation);
                                 Polynomial::Var(Variable {
-                                    index,
-                                    col_type: Any::Instance,
+                                    column_type: Any::Instance,
+                                    index: column,
+                                    offset: rotation.0,
                                 })
                             },
                             &|x| Polynomial::Neg(Box::new(x)),
@@ -388,7 +371,7 @@ mod tests {
             meta.create_gate("Trial3", |meta| {
                 let a = meta.query_advice(a, Rotation::next());
                 let b = meta.query_advice(b, Rotation::cur());
-                let f = meta.query_fixed(f, Rotation::next());
+                let f = meta.query_fixed(f, Rotation::prev());
                 let q1 = meta.query_selector(q1);
                 let q2 = meta.query_selector(q2);
 
